@@ -53,6 +53,8 @@ using std::to_string;
 #define GIT_VERSION "no-git-version"
 #endif
 #define byte char
+#define HIGH 1
+#define LOW 0
 
 extern uint64_t _micros; 
 extern uint64_t _microsMax;
@@ -318,6 +320,15 @@ public:
 			time += duration + .2;
 		}
 	}
+	typedef std::function<int(int)> DigitalReadCallback;
+	typedef std::function<int()> DigitalReadCallbackNoArgs;
+	vector<pair<uint64_t/*pin mask*/,DigitalReadCallback>> digitalReadCallbacks;
+	void registerDigitalReadCallback(uint64_t mask, DigitalReadCallback f) { 
+		digitalReadCallbacks.push_back({mask, f});
+	}
+	void registerDigitalReadCallback(int pin, DigitalReadCallbackNoArgs f) {
+		digitalReadCallbacks.push_back({(uint64_t)0x1 << pin, [f](int) { return f(); }});
+	}
 	Csim_pinManager() { 
 		for(int i = 0; i < sizeof(pins)/sizeof(pins[0]); i++)
 			pins[i] = 1;
@@ -334,9 +345,13 @@ public:
 	static Csim_pinManager *manager;
 	static void setPinManager(Csim_pinManager *p) { manager = p; }  
 	int digitalRead(int pin) {
+		for (auto i : digitalReadCallbacks) { 
+			if ((uint64_t)0x1 << pin & i.first)
+				return i.second(pin);
+		}
 		float now = millis() / 1000.0; // TODO this is kinda slow 
-		for (vector<PressInfo>::iterator it = presses.begin(); it != presses.end(); it++) { 
-			if (it->pin == pin && now >= it->start && now < it->start + it->duration)
+		for (auto i : presses) {
+			if (i.pin == pin && now >= i.start && now < i.start + i.duration)
 				return 0;
 		} 
 		return pins[pin];
@@ -1026,5 +1041,31 @@ struct DHT {
     float readTemperature(bool t = false, bool f = false) { return csim().temp[pin]; }
     float readHumidity(bool f = false) { return csim().humidity[pin]; }
 };
+
+// Simulate an HX711 ADC just well enough to bit-bang and spoof
+// the Adafruit_HX711 library 
+class CsimHx711 : public Csim_Module {
+public:
+    void setResult(int r) { result = r; } 
+    CsimHx711(int _clk, int _data) : clk(_clk), data(_data) {}
+private:
+    int clk, data;
+    uint32_t lastReadUs = 0;
+    int bitIndex = -1;
+    uint32_t result;
+    int readDataPin() { 
+        if (digitalRead(clk) == 0) return 0;
+        if (micros() - lastReadUs > 100 || bitIndex < 0) bitIndex = 23;
+        lastReadUs = micros();
+        int rval = result & (0x1 << bitIndex);
+        bitIndex--;
+        return rval != 0;
+    }
+    void setup() override {
+        Csim_pinManager::manager->registerDigitalReadCallback(data, 
+            [this](){ return readDataPin(); }); 
+    }
+};
+
 
 #endif // #ifdef _ESP32SIM_UBUNTU_H_
