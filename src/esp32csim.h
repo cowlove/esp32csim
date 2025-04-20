@@ -332,7 +332,6 @@ public:
 	Csim_pinManager() { 
 		for(int i = 0; i < sizeof(pins)/sizeof(pins[0]); i++)
 			pins[i] = 1;
-		setPinManager(this); 
 	}
 	int pins[128];
 	virtual int analogRead(int p) { 
@@ -342,8 +341,6 @@ public:
 		pins[p] = v;
 	}
 	virtual void digitalWrite(int p, int v) { pins[p] = v; }
-	static Csim_pinManager *manager;
-	static void setPinManager(Csim_pinManager *p) { manager = p; }  
 	int digitalRead(int pin) {
 		for (auto i : digitalReadCallbacks) { 
 			if ((uint64_t)0x1 << pin & i.first)
@@ -357,6 +354,8 @@ public:
 		return pins[pin];
 	}
 }; 
+
+Csim_pinManager &Csim_pins(); 
 
 // Takes an input of a text file with line-delimited usec intervals between 
 // interrupts, delivers an interrupt to the sketch-provided ISR
@@ -392,8 +391,8 @@ public:
 extern InterruptManager intMan; // make a module, move into Csim
 
 static inline void pinMode(int, int) {}
-static inline void digitalWrite(int p, int v) { Csim_pinManager::manager->digitalWrite(p, v); };
-static inline int digitalRead(int p) { return Csim_pinManager::manager->digitalRead(p); }
+static inline void digitalWrite(int p, int v) { Csim_pins().digitalWrite(p, v); };
+static inline int digitalRead(int p) { return Csim_pins().digitalRead(p); }
 static inline int digitalPinToInterrupt(int) { return 0; }
 static inline void attachInterrupt(int, void (*i)(), int) { intMan.intFunc = i; } 
 static inline void ledcSetup(int, int, int) {}
@@ -407,8 +406,8 @@ static inline void delay(int m) { delayMicroseconds(m*1000); }
 static inline void yield() { intMan.run(); }
 //void analogSetCycles(int) {}
 static inline void adcAttachPin(int) {}
-static inline int analogRead(int p) { return Csim_pinManager::manager->analogRead(p); } 
-static inline void csim_analogSet(int p, int v) { Csim_pinManager::manager->csim_analogSet(p, v); }
+static inline int analogRead(int p) { return Csim_pins().analogRead(p); } 
+static inline void csim_analogSet(int p, int v) { Csim_pins().csim_analogSet(p, v); }
 
 #define radians(x) ((x)*M_PI/180)
 #define degrees(x) ((x)*180.0/M_PI)
@@ -1047,7 +1046,10 @@ struct DHT {
 class CsimHx711 : public Csim_Module {
 public:
     void setResult(int r) { result = r; } 
-    CsimHx711(int _clk, int _data) : clk(_clk), data(_data) {}
+    CsimHx711(int _clk, int _data) : clk(_clk), data(_data) {
+		Csim_pins().registerDigitalReadCallback(data, 
+            [this](){ return readDataPin(); }); 
+	}
 private:
     int clk, data;
     uint32_t lastReadUs = 0;
@@ -1062,8 +1064,6 @@ private:
         return rval != 0;
     }
     void setup() override {
-        Csim_pinManager::manager->registerDigitalReadCallback(data, 
-            [this](){ return readDataPin(); }); 
     }
 };
 

@@ -37,8 +37,10 @@ void ledcWrite(int chan, int val) {
 
 #define SIMFAILURE(x) (sim().simFailureHook(x))
 
-Csim_pinManager pinManObject;
-Csim_pinManager *Csim_pinManager::manager = &pinManObject;
+Csim_pinManager &Csim_pins() { 
+	static Csim_pinManager *firstUse = new Csim_pinManager();
+	return *firstUse;
+} 
 
 uint64_t csim_mac = 0xffeeddaabbcc;
 void esp_read_mac(uint8_t *out, int) {
@@ -286,7 +288,7 @@ void Csim::parseArgs(int argc, char **argv) {
 					int pin, clicks = 1, longclick = 0;
 					float tim;
 					sscanf(*(++a), "%f,%d,%d,%d", &tim, &pin, &clicks, &longclick);
-					Csim_pinManager::manager->addPress(pin, tim, clicks, longclick);
+					Csim_pins().addPress(pin, tim, clicks, longclick);
 		} else if (strcmp(*a, "--serialInput") == 0) {
 			float seconds;
 			sscanf(*(++a), "%f", &seconds);
