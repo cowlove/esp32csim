@@ -9,6 +9,7 @@ void setup(void);
 void loop(void);
 uint64_t _micros = 0;
 uint64_t _microsMax = 0xffffffff;
+static void csim_save_rtc_mem();
 
 static const int MAX_SEMAPHORES = 32;
 int Semaphores[MAX_SEMAPHORES];
@@ -83,6 +84,8 @@ void esp_deep_sleep_start() {
 	}
 
 	for (auto i : deepSleepHooks) i(sleep_timer);
+	csim_save_rtc_mem(); 
+
 	char *argv[128];
 	int argc = 0; 
 	// strip out all --boot-time, --seconds, --reset-reason and --show-args command line arguments
@@ -104,7 +107,8 @@ void esp_deep_sleep_start() {
 	argv[argc++] = (char *)"--reset-reason";
 	argv[argc++] = (char *)"5";
 	argv[argc++] = (char *)"--show-args";
-	argv[argc++] = NULL; 
+	argv[argc++] = NULL;
+	fflush(stdout);
 	execv("./csim", argv); 
 }
 void esp_light_sleep_start() {
@@ -303,6 +307,31 @@ void Csim::parseArgs(int argc, char **argv) {
 		}
 	}
 }
+
+// TODO IDEA: simulate RTC memory with a special linkage section that 
+// is saved and restored to disk 
+#define RTC_NOINIT_ATTR __attribute__((section("CSIM_RTC_MEM")))
+static RTC_NOINIT_ATTR int rtc_dummy;
+
+extern uint8_t __start_CSIM_RTC_MEM, __stop_CSIM_RTC_MEM;
+
+static void csim_save_rtc_mem() {
+	size_t len = &__stop_CSIM_RTC_MEM - &__start_CSIM_RTC_MEM;
+	int fd = open("./csim_rtc.bin", O_CREAT | O_WRONLY, 0644);
+	write(fd, &__start_CSIM_RTC_MEM, len);
+	close(fd);
+}
+static void csim_load_rtc_mem(int resetReason) {
+	size_t len = &__stop_CSIM_RTC_MEM - &__start_CSIM_RTC_MEM;
+	uint32_t pattern = 0xdeadbeef;
+	memset(&__start_CSIM_RTC_MEM, 0xde, len);
+	if (resetReason == 5) {  
+		int fd = open("./csim_rtc.bin", O_RDONLY, 0644);
+		read(fd, &__start_CSIM_RTC_MEM, len);
+		close(fd);
+	}
+}
+
 void Csim::main(int argc, char **argv) {
 	this->argc = argc;
 	this->argv = argv;
@@ -314,8 +343,12 @@ void Csim::main(int argc, char **argv) {
 				printf("%s ", *a);
 		printf("\n");
 	}
-	for(vector<Csim_Module *>::iterator it = modules.begin(); it != modules.end(); it++) 
-		(*it)->setup();
+	csim_load_rtc_mem(resetReason);
+	printf("rtc_dummy: %d\n", rtc_dummy);
+	rtc_dummy = rtc_dummy + 1;
+
+	for(int i = 0; i < modules.size(); i++) // avoid iterator, modules may be added during setup() calls
+		modules[i]->setup();
 	setup();
 
 	uint64_t lastMillis = 0;
