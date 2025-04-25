@@ -122,6 +122,34 @@ ESPNOW_csimInterface *ESPNOW_sendHandler = NULL;
 esp_now_send_cb_t ESP32_esp_now_send_cb = NULL;
 esp_now_recv_cb_t ESP32_esp_now_recv_cb = NULL;
 
+void esp_wifi_set_promiscuous_rx_cb(void (*f)(void *, wifi_promiscuous_pkt_type_t)) {
+	// HACK: just do a few immediate dummy callbacks to test codepath 
+	typedef struct {
+		unsigned protocol:2;
+		unsigned type:2;
+		unsigned subtype:4;
+		unsigned ignore1:8;
+		unsigned long long recv_addr:48; 
+		unsigned long long send_addr:48; 
+		unsigned ignore2:32;
+		uint64_t timestamp;
+	} raw_beacon_packet_t;    
+	
+    for(int n = 0; n < 10; n++) { 
+        wifi_promiscuous_pkt_t pt = {0};
+        raw_beacon_packet_t pk = {0};
+        pt.payload = (uint8_t *)&pk;
+        pk.subtype = 0x8;
+        pk.timestamp = 0x1234123412341234LL + n * 1000;
+        pt.rx_ctrl.rssi = -76;
+		for (int m = 0; m < 5; m++) {
+			pk.send_addr = 0xfeedfeedfee0LL + m;
+			f((void *)&pt, 0);
+		}
+    }
+}
+
+
 static int csim_defaultOnPOST(const char *url, const char *hdr, const char *data, string &result) {
 	string cmd = string("curl --silent -X POST -H '") + hdr + "' -d '" +
 		data + "' " + url;
@@ -321,9 +349,9 @@ static void csim_save_rtc_mem() {
 	write(fd, &__start_CSIM_RTC_MEM, len);
 	close(fd);
 }
+
 static void csim_load_rtc_mem(int resetReason) {
 	size_t len = &__stop_CSIM_RTC_MEM - &__start_CSIM_RTC_MEM;
-	uint32_t pattern = 0xdeadbeef;
 	memset(&__start_CSIM_RTC_MEM, 0xde, len);
 	if (resetReason == 5) {  
 		int fd = open("./csim_rtc.bin", O_RDONLY, 0644);

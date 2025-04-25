@@ -627,6 +627,20 @@ public:
 	}
 };
 
+typedef int wifi_promiscuous_pkt_type_t;
+typedef struct { int dummy; } wifi_promiscuous_filter_t;
+#define WIFI_PROMIS_FILTER_MASK_MGMT 0 
+static inline void esp_wifi_set_promiscuous_filter(const wifi_promiscuous_filter_t *) {}
+static inline void esp_wifi_set_promiscuous(int) {}
+typedef struct { 
+	uint8_t *payload;
+	struct { 
+		uint32_t rssi; 
+		uint64_t timestamp;
+	} rx_ctrl; 
+} wifi_promiscuous_pkt_t;
+void esp_wifi_set_promiscuous_rx_cb(void (*f)(void *, wifi_promiscuous_pkt_type_t));
+
 // stub out PubSubClient library
 class PubSubClient : public Csim_Module {
 	std::function<void(char *, byte *p, unsigned int)> callback = nullptr;
@@ -834,6 +848,7 @@ extern ESPNOW_csimInterface *ESPNOW_sendHandler;
 extern esp_now_send_cb_t ESP32_esp_now_send_cb;
 extern esp_now_recv_cb_t ESP32_esp_now_recv_cb;
 
+#define WIFI_MODE_STA 0
 static inline int esp_wifi_internal_set_fix_rate(int, int, int) { return ESP_OK; } 
 static inline int esp_now_register_recv_cb(void *) { return ESP_OK; }	
 static inline int esp_now_register_send_cb( void *) { return ESP_OK; }
@@ -844,7 +859,9 @@ static inline int esp_wifi_stop() { return ESP_OK; }
 static inline int esp_wifi_deinit() { return ESP_OK; } 
 static inline int esp_wifi_init(wifi_init_config_t *) { return ESP_OK; } 
 static inline int esp_wifi_start() { return ESP_OK; } 
-static inline int esp_wifi_set_channel(int, int) { return ESP_OK; } 
+static inline int esp_wifi_set_channel(int, int) { return ESP_OK; }
+static inline int esp_wifi_set_mode(int) { return ESP_OK; } 
+static inline int esp_wifi_disconnect() { return ESP_OK; } 
 static inline int esp_now_register_send_cb(esp_now_send_cb_t cb) { ESP32_esp_now_send_cb = cb; return ESP_OK; }
 static inline int esp_now_register_recv_cb(esp_now_recv_cb_t cb) { ESP32_esp_now_recv_cb = cb; return ESP_OK; }
 static inline int esp_now_register_recv_cb(esp_now_recv_cb_t_v3 cb) { return ESP_OK; }
