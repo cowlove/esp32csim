@@ -128,10 +128,10 @@ void esp_wifi_set_promiscuous_rx_cb(void (*f)(void *, wifi_promiscuous_pkt_type_
 		unsigned protocol:2;
 		unsigned type:2;
 		unsigned subtype:4;
-		unsigned ignore1:8;
+		unsigned ignore1:24;
 		unsigned long long recv_addr:48; 
 		unsigned long long send_addr:48; 
-		unsigned ignore2:32;
+		unsigned ignore2:16;
 		uint64_t timestamp;
 	} raw_beacon_packet_t;    
 	
