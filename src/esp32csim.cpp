@@ -510,4 +510,30 @@ int FakeCAN::read() {
 	return rval; 
 }
 
+fs::File::File(const char *fn, int m) {
+	mkdir("./SD", 0755);
+	filename = string("./SD/") + fn;
+	fflush(stdout);
+	int mode = 0;
+	if (m & F_CREAT) mode |= O_CREAT;
+	if (m & F_APPEND) mode |= O_APPEND;
+	if (m & F_TRUNC) mode |= O_TRUNC;
+	if (m & F_WRITE) mode |= O_WRONLY;
+	if (m & F_RDONLY) mode |= O_RDONLY;
+	fd = open(filename.c_str(), mode, 0644);
+}
+
+fs::File::File(const char *fn, const char *m) {
+	mkdir("./spiff", 0755);
+	filename = string("./spiff/") + fn;
+	int mode = O_RDONLY;
+	if (strcmp(m, "a") == 0) mode = O_CREAT | O_APPEND | O_WRONLY;
+	if (strcmp(m, "r") == 0) mode = O_CREAT | O_RDONLY;
+	if (strcmp(m, "w") == 0) mode = O_CREAT | O_TRUNC | O_WRONLY;
+	if (strcmp(m, "r+") == 0) mode = O_CREAT | O_RDWR;
+	if (strcmp(m, "w+") == 0) mode = O_CREAT | O_TRUNC | O_RDWR;
+	fd = open(filename.c_str(), mode, 0644);
+}
+
+
 #endif

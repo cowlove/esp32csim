@@ -154,30 +154,28 @@ struct Adafruit_NeoPixel {
   void clear() {}
 };
 
-// stub out FS.h
+// stub out FS.h 
+// HACK: fs::File stands in for both the File object in fs.h and the ext::File object in mySD.h
 namespace fs { 
 class File {
 	int fd = -1;
 	string filename;
 public: 
 	File() {}
-	File(const char *fn, const char *m) {
-		mkdir("./spiff", 0755);
-		filename = string("./spiff/") + fn;
-		int mode = O_RDONLY;
-		if (strcmp(m, "a") == 0) mode = O_CREAT | O_APPEND | O_WRONLY;
-		if (strcmp(m, "r") == 0) mode = O_CREAT | O_RDONLY;
-		if (strcmp(m, "w") == 0) mode = O_CREAT | O_TRUNC | O_WRONLY;
-		if (strcmp(m, "r+") == 0) mode = O_CREAT | O_RDWR;
-		if (strcmp(m, "w+") == 0) mode = O_CREAT | O_TRUNC | O_RDWR;
-		fd = open(filename.c_str(), mode, 0644);
+	File(const char *fn, const char *m); // called by fs::File code
+	File(const char *fn, int m);         // called by mySD.h ext::File code 
+	File &operator =(const File &f) { 
+		fd = (f.fd != -1) ? dup(f.fd) : -1;
+		filename = f.filename;
+		return *this;
 	}
-	bool operator!() { return false; } 
-	operator bool() { return true; } 
+	bool operator!() { return fd == -1; } 
+	operator bool() { return fd != -1; } 
 	File openNextFile(void) { return *this; }
 	void close() { if (fd != -1) ::close(fd); fd = -1; }
     int print(const char *s) { return ::write(fd, s, strlen(s)); }
 	int printf(const char *, ...) { return 0; } 
+	int write(const char *d) { return this->write(d, strlen(d)); } 
 	int write(const char *d, int l) { return ::write(fd, d, l); } 
 	int write(const uint8_t *d, int l) { return ::write(fd, d, l); } 
 	int write(uint8_t c) { return ::write(fd, &c, 1); }
@@ -687,10 +685,29 @@ class PubSubClient : public Csim_Module {
 };
 
 // stub out SD library
+
+namespace ext { 
+	typedef fs::File File;
+};
+
+#define FILE_READ F_READ
+#define FILE_WRITE (F_READ | F_WRITE | F_CREAT)
+#define F_READ  0X01
+#define F_RDONLY  F_READ
+#define F_WRITE  0X02
+#define F_WRONLY  F_WRITE
+#define F_RDWR  (F_READ | F_WRITE)
+#define F_ACCMODE  (F_READ | F_WRITE)
+#define F_APPEND  0X04
+#define F_SYNC  0X08
+#define F_CREAT  0X10
+#define F_EXCL  0X20
+#define F_TRUNC  0X40
+
 class FakeSD {
 	public:
 	bool begin(int, int, int, int) { return true; }
-	fs::File open(const char *) { return fs::File(); } 
+	ext::File open(const char *fn, int m = FILE_READ) { return fs::File(fn, m); } 
 };
 extern FakeSD SD;
 
