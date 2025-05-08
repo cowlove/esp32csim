@@ -31,6 +31,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <malloc.h>
 
 using std::map;
@@ -65,6 +66,7 @@ inline static void delayUs(int x) { delayMicroseconds(x); }
 
 class Csim_Module {
 public:
+	bool loopActive = false;
 	Csim_Module();
 	virtual void parseArg( char **&, char **) {}
 	virtual void setup() {};
@@ -85,6 +87,11 @@ public:
 
 extern Csim_flags csim_flags; // TODO move into Csim
 
+
+class CsimContext { 
+
+};
+
 class Csim {
 public:
 	int argc; 
@@ -93,6 +100,7 @@ public:
 	double seconds = -1;
 	int resetReason = 0;
 	bool showArgs;
+	uint64_t realTimeMsec, lastRealTimeMsec;
 	vector<Csim_Module *> modules;
 	struct TimerInfo { 
 		uint64_t last;
@@ -104,6 +112,9 @@ public:
 	void main(int argc, char **argv);
 	void parseArgs(int argc, char **argv);
 	void exit();
+	bool realTimeTickSec(float s) { 
+		return floor(realTimeMsec / 1000.0 / s) != floor(lastRealTimeMsec / 1000.0 / s);
+	}
 	std::function<bool(const char*)> simFailureHook = [](const char *){return false;};
 };
 
@@ -833,6 +844,8 @@ typedef void (*esp_now_send_cb_t)(const uint8_t *mac_addr, esp_now_send_status_t
 
 class ESPNOW_csimInterface {
 public:
+	esp_now_recv_cb_t recv_cb = NULL;
+	esp_now_send_cb_t send_cb = NULL;
 	virtual void send(const uint8_t *mac_addr, const uint8_t *data, int data_len) = 0;
 };
 
@@ -851,7 +864,8 @@ public:
 
 class ESPNOW_csimOneProg : public Csim_Module, public ESPNOW_csimInterface {
 	struct SimPacket {
-		uint8_t mac[6];
+		uint8_t send_addr[6];
+		uint8_t recv_addr[6];
 		string data;
 	};
 	vector<SimPacket> pktQueue;
@@ -862,13 +876,9 @@ public:
 };
 
 extern ESPNOW_csimInterface *ESPNOW_sendHandler;
-extern esp_now_send_cb_t ESP32_esp_now_send_cb;
-extern esp_now_recv_cb_t ESP32_esp_now_recv_cb;
 
 #define WIFI_MODE_STA 0
 static inline int esp_wifi_internal_set_fix_rate(int, int, int) { return ESP_OK; } 
-static inline int esp_now_register_recv_cb(void *) { return ESP_OK; }	
-static inline int esp_now_register_send_cb( void *) { return ESP_OK; }
 static inline int esp_now_init() { return ESP_OK; } 
 static inline int esp_now_deinit() { return ESP_OK; } 
 static inline int esp_now_add_peer(void *) { return ESP_OK; } 
@@ -879,9 +889,15 @@ static inline int esp_wifi_start() { return ESP_OK; }
 static inline int esp_wifi_set_channel(int, int) { return ESP_OK; }
 static inline int esp_wifi_set_mode(int) { return ESP_OK; } 
 static inline int esp_wifi_disconnect() { return ESP_OK; } 
-static inline int esp_now_register_send_cb(esp_now_send_cb_t cb) { ESP32_esp_now_send_cb = cb; return ESP_OK; }
-static inline int esp_now_register_recv_cb(esp_now_recv_cb_t cb) { ESP32_esp_now_recv_cb = cb; return ESP_OK; }
-static inline int esp_now_register_recv_cb(esp_now_recv_cb_t_v3 cb) { return ESP_OK; }
+static inline int esp_now_register_send_cb(esp_now_send_cb_t cb) { 
+	if (ESPNOW_sendHandler != NULL) ESPNOW_sendHandler->send_cb = cb; 
+	return ESP_OK; 
+}
+static inline int esp_now_register_recv_cb(esp_now_recv_cb_t cb) { 
+	if (ESPNOW_sendHandler != NULL) ESPNOW_sendHandler->recv_cb = cb; 
+	return ESP_OK; 
+}
+//static inline int esp_now_register_recv_cb(esp_now_recv_cb_t_v3 cb) { return ESP_OK; }
 static inline int esp_wifi_config_espnow_rate(int, int) { return ESP_OK; }
 int esp_now_send(const uint8_t*mac, const uint8_t*data, size_t len);
 

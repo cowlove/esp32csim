@@ -119,8 +119,6 @@ void esp_light_sleep_start() {
 } 
 
 ESPNOW_csimInterface *ESPNOW_sendHandler = NULL;
-esp_now_send_cb_t ESP32_esp_now_send_cb = NULL;
-esp_now_recv_cb_t ESP32_esp_now_recv_cb = NULL;
 
 void esp_wifi_set_promiscuous_rx_cb(void (*f)(void *, wifi_promiscuous_pkt_type_t)) {
 	// HACK: just do a few immediate dummy callbacks to test codepath 
@@ -148,7 +146,6 @@ void esp_wifi_set_promiscuous_rx_cb(void (*f)(void *, wifi_promiscuous_pkt_type_
 		}
     }
 }
-
 
 static int csim_defaultOnPOST(const char *url, const char *hdr, const char *data, string &result) {
 	string cmd = string("curl --silent -X POST -H '") + hdr + "' -d '" +
@@ -212,17 +209,21 @@ WiFiUDP::InputMap WiFiUDP::inputMap;
 
 void ESPNOW_csimOneProg::send(const uint8_t *mac_addr, const uint8_t *data, int data_len) {//override {
 	SimPacket p; 
-	memcpy(p.mac, mac_addr, sizeof(p.mac));
+	uint8_t mymac[6];
+	esp_read_mac(mymac, sizeof(mymac));
+	memcpy(p.send_addr, mymac, sizeof(p.send_addr));
+	memcpy(p.recv_addr, mac_addr, sizeof(p.recv_addr));
 	const char *cp = (const char *)data;
 	p.data = string(cp, cp + data_len);
 	pktQueue.push_back(p);
 }
+
 void ESPNOW_csimOneProg::loop() { // override
 	for(auto pkt : pktQueue) {
-		if (ESP32_esp_now_recv_cb != NULL) {
+		if (recv_cb != NULL) {
 			if (SIMFAILURE("espnow-rx") || SIMFAILURE("espnow"))
 				continue;
-			ESP32_esp_now_recv_cb(pkt.mac, (const uint8_t *)pkt.data.c_str(), pkt.data.length());
+			recv_cb(pkt.send_addr, (const uint8_t *)pkt.data.c_str(), pkt.data.length());
 		}
 	}
 	pktQueue.clear();
@@ -262,14 +263,14 @@ void ESPNOW_csimPipe::send(const uint8_t *mac_addr, const uint8_t *data, int len
 
 void ESPNOW_csimPipe::loop() { // override
 	static uint8_t mac[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-	char buf[512];
+	char buf[8192];
 	int n;
 	while(fdIn > 0 && (n = ::read(fdIn, buf, sizeof(buf))) > 0) { 
 		if (SIMFAILURE("espnow-rx") || SIMFAILURE("espnow"))
 		return;
 
-		if (ESP32_esp_now_recv_cb != NULL) {
-			ESP32_esp_now_recv_cb(mac, (uint8_t *)buf, n);
+		if (recv_cb != NULL) {
+			recv_cb(mac, (uint8_t *)buf, n);
 		}	
 	}
 } 
@@ -277,11 +278,11 @@ void ESPNOW_csimPipe::loop() { // override
 int esp_now_send(const uint8_t*mac, const uint8_t*data, size_t len) {
 	if (SIMFAILURE("espnow-tx") || SIMFAILURE("espnow"))
 		return ESP_OK;
-
-	if (ESP32_esp_now_send_cb != NULL)
-		ESP32_esp_now_send_cb(mac, ESP_NOW_SEND_SUCCESS); 
-	if (ESPNOW_sendHandler != NULL) 
-		ESPNOW_sendHandler->send(mac, data, len); 
+	if (ESPNOW_sendHandler != NULL) {
+		ESPNOW_sendHandler->send(mac, data, len);
+		if (ESPNOW_sendHandler->send_cb != NULL) 
+			ESPNOW_sendHandler->send_cb(mac, ESP_NOW_SEND_SUCCESS);
+	}
 	return ESP_OK; 
 }
 
@@ -381,10 +382,17 @@ void Csim::main(int argc, char **argv) {
 
 	uint64_t lastMillis = 0;
 	while(seconds <= 0 || _micros / 1000000.0 < seconds) {
+		lastRealTimeMsec = realTimeMsec;
+		struct timeval tv;
+		gettimeofday(&tv,NULL);
+		realTimeMsec = tv.tv_sec * 1000 +  tv.tv_usec / 1000;
+
 		uint64_t now = millis();
 		//for(vector<Csim_Module *>::iterator it = modules.begin(); it != modules.end(); it++) 
 		for(auto it : modules) {
+			it->loopActive = true;
 			it->loop();
+			it->loopActive = false;
 		}
 		loop();
 		intMan.run();
@@ -405,7 +413,11 @@ void Csim::delayMicroseconds(long long us) {
 		int step = min(100000LL, us);
 		_micros += step;
 		for(auto it : modules) {
-			it->loop();
+			if (it->loopActive == false) {
+				it->loopActive = true;
+				it->loop();
+				it->loopActive = false;
+			}
 		}
 		intMan.run();
 		us -= step;
