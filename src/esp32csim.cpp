@@ -43,9 +43,8 @@ Csim_pinManager &Csim_pins() {
 	return *firstUse;
 } 
 
-uint64_t csim_mac = 0xffeeddaabbcc;
 void esp_read_mac(uint8_t *out, int) {
-	uint64_t nmac = htonll(csim_mac);
+	uint64_t nmac = htonll(currentContext->mac);
 	uint8_t *p = (uint8_t *)&nmac;
 	memcpy(out, p + 2, 6);
 }
@@ -66,7 +65,8 @@ Csim &sim() {
 	return *staticFirstUse;
 }
 
-Csim_flags csim_flags;
+CsimContext defaultContext = {0xffeeddaabbcc, NULL};
+CsimContext *currentContext = &defaultContext;
 
 void Csim_exit() { 	sim().exit(); }
 
@@ -117,8 +117,6 @@ void esp_light_sleep_start() {
 	if (sim().seconds > 0 && micros() / 1000000.0 > sim().seconds)
 		Csim_exit();
 } 
-
-ESPNOW_csimInterface *ESPNOW_sendHandler = NULL;
 
 void esp_wifi_set_promiscuous_rx_cb(void (*f)(void *, wifi_promiscuous_pkt_type_t)) {
 	// HACK: just do a few immediate dummy callbacks to test codepath 
@@ -207,6 +205,11 @@ DHT::CsimInterface &DHT::csim() {
 // TODO: extend this to use vector<unsigned char> to handle binary data	
 WiFiUDP::InputMap WiFiUDP::inputMap;
 
+vector<ESPNOW_csimOneProg *> &ESPNOW_csimOneProg::instanceList() { 
+	static vector<ESPNOW_csimOneProg *> firstUse;
+	return firstUse;
+}
+
 void ESPNOW_csimOneProg::send(const uint8_t *mac_addr, const uint8_t *data, int data_len) {//override {
 	SimPacket p; 
 	uint8_t mymac[6];
@@ -215,7 +218,10 @@ void ESPNOW_csimOneProg::send(const uint8_t *mac_addr, const uint8_t *data, int 
 	memcpy(p.recv_addr, mac_addr, sizeof(p.recv_addr));
 	const char *cp = (const char *)data;
 	p.data = string(cp, cp + data_len);
-	pktQueue.push_back(p);
+	for(auto o : instanceList()) {
+		if (o != this) 
+			o->pktQueue.push_back(p);
+	}
 }
 
 void ESPNOW_csimOneProg::loop() { // override
@@ -278,13 +284,26 @@ void ESPNOW_csimPipe::loop() { // override
 int esp_now_send(const uint8_t*mac, const uint8_t*data, size_t len) {
 	if (SIMFAILURE("espnow-tx") || SIMFAILURE("espnow"))
 		return ESP_OK;
-	if (ESPNOW_sendHandler != NULL) {
-		ESPNOW_sendHandler->send(mac, data, len);
-		if (ESPNOW_sendHandler->send_cb != NULL) 
-			ESPNOW_sendHandler->send_cb(mac, ESP_NOW_SEND_SUCCESS);
+	if (currentContext->espnow != NULL) {
+		currentContext->espnow->send(mac, data, len);
+		if (currentContext->espnow->send_cb != NULL) 
+			currentContext->espnow->send_cb(mac, ESP_NOW_SEND_SUCCESS);
 	}
 	return ESP_OK; 
 }
+
+int esp_now_register_send_cb(esp_now_send_cb_t cb) { 
+	if (currentContext->espnow != NULL) currentContext->espnow->send_cb = cb; 
+	return ESP_OK; 
+}
+int esp_now_register_recv_cb(esp_now_recv_cb_t cb) { 
+	if (currentContext->espnow != NULL) currentContext->espnow->recv_cb = cb; 
+	return ESP_OK; 
+}
+
+// VERY very limited context to support two modules running under minimal
+// premise that they are separate ESP32s.  Only provides a unique MAC,
+// and unique callback vectors for a few callbacks.
 
 
 Csim_Module::Csim_Module() { 
@@ -309,12 +328,11 @@ void Csim::parseArgs(int argc, char **argv) {
 		else if (strcmp(*a, "--show-args") == 0) showArgs = true; 
 		else if (strcmp(*a, "--reset-reason") == 0) sscanf(*(++a), "%d", &resetReason); 
 		else if (strcmp(*a, "--mac") == 0) { 
-			sscanf(*(++a), "%lx", &csim_mac);
+			sscanf(*(++a), "%lx", &defaultContext.mac);
 		} else if (strcmp(*a, "--espnowPipe") == 0) { 
-			ESPNOW_sendHandler= new ESPNOW_csimPipe(*(++a), *(++a));
+			defaultContext.espnow = new ESPNOW_csimPipe(*(++a), *(++a));
 		} else if (strcmp(*a, "--espnowOneProg") == 0) { 
-			ESPNOW_sendHandler= new ESPNOW_csimOneProg();
-			csim_flags.OneProg = true;
+			defaultContext.espnow = new ESPNOW_csimOneProg();
 		} else if (strcmp(*a, "--interruptFile") == 0) { 
 			intMan.setInterruptFile(*(++a));
 		} else if (strcmp(*a, "--button") == 0) {
@@ -331,8 +349,8 @@ void Csim::parseArgs(int argc, char **argv) {
 			float seconds;
 			sscanf(*(++a), "%f", &seconds);
 			Serial2.scheduleInput(seconds * 1000, String(*(++a)) + "\n");
-		} else for(vector<Csim_Module *>::iterator it = modules.begin(); it != modules.end(); it++) {
-			(*it)->parseArg(a, argv + argc);
+		} else for(int i = 0; i < modules.size(); i++) { // avoid iterator, modules may be added during setup() calls
+			modules[i]->parseArg(a, argv + argc);
 		}
 	}
 }
@@ -361,6 +379,20 @@ static void csim_load_rtc_mem(int resetReason) {
 	}
 }
 
+class CsimScopedContextSwap {
+	CsimContext *origC;
+public:
+	CsimScopedContextSwap(CsimContext *c) {
+		origC = currentContext;
+		currentContext = c == NULL ? &defaultContext : c;
+	}
+	~CsimScopedContextSwap() {
+		if (origC != NULL) { 
+			currentContext = origC; 
+		}
+	}
+};
+
 void Csim::main(int argc, char **argv) {
 	this->argc = argc;
 	this->argv = argv;
@@ -376,8 +408,10 @@ void Csim::main(int argc, char **argv) {
 	printf("rtc_dummy: %d\n", rtc_dummy);
 	rtc_dummy = rtc_dummy + 1;
 
-	for(int i = 0; i < modules.size(); i++) // avoid iterator, modules may be added during setup() calls
+	for(int i = 0; i < modules.size(); i++)  {// avoid iterator, modules may be added during setup() calls
+		CsimScopedContextSwap swap(modules[i]->context);		
 		modules[i]->setup();
+	}
 	setup();
 
 	uint64_t lastMillis = 0;
@@ -390,6 +424,7 @@ void Csim::main(int argc, char **argv) {
 		uint64_t now = millis();
 		//for(vector<Csim_Module *>::iterator it = modules.begin(); it != modules.end(); it++) 
 		for(auto it : modules) {
+			CsimScopedContextSwap swap(it->context);		
 			it->loopActive = true;
 			it->loop();
 			it->loopActive = false;
@@ -414,6 +449,7 @@ void Csim::delayMicroseconds(long long us) {
 		_micros += step;
 		for(auto it : modules) {
 			if (it->loopActive == false) {
+				CsimScopedContextSwap swap(it->context);		
 				it->loopActive = true;
 				it->loop();
 				it->loopActive = false;

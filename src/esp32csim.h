@@ -64,32 +64,19 @@ uint32_t millis();
 void delayMicroseconds(int);
 inline static void delayUs(int x) { delayMicroseconds(x); } 
 
+
+struct CsimContext;
+extern CsimContext *currentContext;
+
 class Csim_Module {
 public:
+	CsimContext *context = NULL;
 	bool loopActive = false;
 	Csim_Module();
 	virtual void parseArg( char **&, char **) {}
 	virtual void setup() {};
 	virtual void loop() {};
 	virtual void done() {};
-};
-
-class Csim_flags : public Csim_Module { 
-	void addflag(const char *f) {
-		if (strcmp(f, "OneProg") == 0) OneProg = true;
-	}
-public:
-	bool OneProg = false;
-	virtual void parseArg(char **&a, char **) override {
-		if (strcmp(*a, "--csimFlag") == 0) addflag(*(++a));
-	}
-};
-
-extern Csim_flags csim_flags; // TODO move into Csim
-
-
-class CsimContext { 
-
 };
 
 class Csim {
@@ -869,13 +856,12 @@ class ESPNOW_csimOneProg : public Csim_Module, public ESPNOW_csimInterface {
 		string data;
 	};
 	vector<SimPacket> pktQueue;
+	static vector<ESPNOW_csimOneProg *> &instanceList();
 public:
-	ESPNOW_csimOneProg() {}
+	ESPNOW_csimOneProg() { instanceList().push_back(this); }
 	void send(const uint8_t *mac_addr, const uint8_t *data, int data_len) override;
 	virtual void loop() override;
 };
-
-extern ESPNOW_csimInterface *ESPNOW_sendHandler;
 
 #define WIFI_MODE_STA 0
 static inline int esp_wifi_internal_set_fix_rate(int, int, int) { return ESP_OK; } 
@@ -889,17 +875,20 @@ static inline int esp_wifi_start() { return ESP_OK; }
 static inline int esp_wifi_set_channel(int, int) { return ESP_OK; }
 static inline int esp_wifi_set_mode(int) { return ESP_OK; } 
 static inline int esp_wifi_disconnect() { return ESP_OK; } 
-static inline int esp_now_register_send_cb(esp_now_send_cb_t cb) { 
-	if (ESPNOW_sendHandler != NULL) ESPNOW_sendHandler->send_cb = cb; 
-	return ESP_OK; 
-}
-static inline int esp_now_register_recv_cb(esp_now_recv_cb_t cb) { 
-	if (ESPNOW_sendHandler != NULL) ESPNOW_sendHandler->recv_cb = cb; 
-	return ESP_OK; 
-}
-//static inline int esp_now_register_recv_cb(esp_now_recv_cb_t_v3 cb) { return ESP_OK; }
 static inline int esp_wifi_config_espnow_rate(int, int) { return ESP_OK; }
+int esp_now_register_send_cb(esp_now_send_cb_t cb);
+int esp_now_register_recv_cb(esp_now_recv_cb_t cb);
+//static inline int esp_now_register_recv_cb(esp_now_recv_cb_t_v3 cb) { return ESP_OK; }
 int esp_now_send(const uint8_t*mac, const uint8_t*data, size_t len);
+
+// VERY very limited context to support two modules running under minimal
+// premise that they are separate ESP32s.  Only provides a unique MAC,
+// and unique callback vectors for a few callbacks.
+
+struct CsimContext { 
+	uint64_t mac;
+	ESPNOW_csimInterface *espnow = NULL;
+};
 
 // Stub out MPU9250 library
 #define INV_SUCCESS 1
