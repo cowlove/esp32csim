@@ -68,6 +68,7 @@ inline static void delayUs(int x) { delayMicroseconds(x); }
 struct CsimContext;
 extern CsimContext *currentContext;
 
+
 class Csim_Module {
 public:
 	CsimContext *context = NULL;
@@ -889,7 +890,7 @@ struct CsimContext {
 	uint64_t mac;
 	ESPNOW_csimInterface *espnow = NULL;
 };
-
+extern CsimContext defaultContext;
 // Stub out MPU9250 library
 #define INV_SUCCESS 1
 #define INV_XYZ_GYRO 1

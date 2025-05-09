@@ -307,6 +307,7 @@ int esp_now_register_recv_cb(esp_now_recv_cb_t cb) {
 
 
 Csim_Module::Csim_Module() { 
+	assert(currentContext == &defaultContext); // someone didn't reset currentContext after module constructor
 	sim().modules.push_back(this);
 }
 
@@ -394,6 +395,7 @@ public:
 };
 
 void Csim::main(int argc, char **argv) {
+	assert(currentContext == &defaultContext); // someone didn't reset currentContext after module constructor
 	this->argc = argc;
 	this->argv = argv;
 	Serial.toConsole = true;
@@ -412,6 +414,7 @@ void Csim::main(int argc, char **argv) {
 		CsimScopedContextSwap swap(modules[i]->context);		
 		modules[i]->setup();
 	}
+	assert(currentContext == &defaultContext); // someone didn't reset currentContext after module setup
 	setup();
 
 	uint64_t lastMillis = 0;
@@ -429,6 +432,7 @@ void Csim::main(int argc, char **argv) {
 			it->loop();
 			it->loopActive = false;
 		}
+		assert(currentContext == &defaultContext); // someone didn't reset currentContext after module loop
 		loop();
 		intMan.run();
 
