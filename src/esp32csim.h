@@ -856,7 +856,7 @@ class ESPNOW_csimOneProg : public Csim_Module, public ESPNOW_csimInterface {
 		uint8_t recv_addr[6];
 		string data;
 	};
-	vector<SimPacket> pktQueue;
+	std::deque<SimPacket> pktQueue;
 	static vector<ESPNOW_csimOneProg *> &instanceList();
 public:
 	ESPNOW_csimOneProg() { instanceList().push_back(this); }
