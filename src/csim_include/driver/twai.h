@@ -1,4 +1,5 @@
 #pragma once
+#ifdef CSIM
 #include "Arduino.h"
 typedef struct {
     union {
@@ -69,6 +70,7 @@ int twai_transmit(twai_message_t *, int);
 int twai_get_status_info(twai_status_info_t *);
 
 #define TWAI_MODE_NORMAL 0
+#define TWAI_MODE_LISTEN_ONLY 0
 #define TWAI_IO_UNUSED 0 
 #define TWAI_ALERT_NONE 0 
 #define ESP_INTR_FLAG_LEVEL1 0 
@@ -80,4 +82,4 @@ int twai_get_status_info(twai_status_info_t *);
 #define TWAI_TIMING_CONFIG_800KBITS() {0}
 #define TWAI_TIMING_CONFIG_1MBITS() {0}
 #define TWAI_FILTER_CONFIG_ACCEPT_ALL() {0}
-
+#endif
