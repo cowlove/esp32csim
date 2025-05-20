@@ -1,7 +1,7 @@
 SKETCH_NAME=$(shell basename `pwd`)
 CSIM_BUILD_DIR=./build/csim
 CSIM_LIBS+=esp32csim
-
+CCACHE=ccache
 CSIM_SRC_DIRS=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L}/src)
 CSIM_SRC_DIRS+=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L})
 CSIM_SRC_DIRS+=$(foreach L,$(CSIM_LIBS),${HOME}/Arduino/libraries/${L}/src/csim_include)
