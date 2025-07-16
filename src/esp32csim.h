@@ -1132,11 +1132,15 @@ static inline void portDISABLE_INTERRUPTS() {}
 static inline void enableLoopWDT() {}
 static inline void disableLoopWDT() {}
 static inline void disableCore1WDT() {}
+static inline void enableCore1WDT() {}
+static inline void disableCore0WDT() {}
+static inline void enableCore0WDT() {}
 #define XTHAL_GET_CCOUNT() 0
 static inline int xthal_get_ccount() { return 0; }
 static inline void gpio_set_drive_capability(int, int) {}
 #define GPIO_DRIVE_CAP_MAX 0 
 #define IRAM_ATTR 
+#define DRAM_ATTR 
 static inline void *heap_caps_aligned_alloc(int, int sz, int) { return malloc(sz); }
 static inline int cache_hal_get_cache_line_size(int, int) { return 64; }
 static inline void xTaskCreatePinnedToCore(void (*)(void *), const char *, int, void *, int, void *, int) {}
@@ -1169,4 +1173,43 @@ static inline int esp_async_memcpy_install(void *, void *) { return 0; }
 static inline int esp_async_memcpy(void *, void *dst, void *src, int sz, bool (*)(void**, void**, void*), void *) { memcpy(dst, src, sz); return 0; } 
 static inline void neopixelWrite(int, int, int, int) {}
 
+
+#define SYSTEM_CONTROL_CORE_1_CLKGATE_EN 0 
+#define SYSTEM_CORE_1_CONTROL_0_REG 0
+#define SYSTEM_CORE_1_CONTROL_1_REG 0 
+static inline void ets_set_appcpu_boot_addr(uint32_t) {}
+#define DPORT_REG_CLR_BIT(a,b) 0
+#define DPORT_REG_SET_BIT(a,b) 0 
+#define SYSTEM_CONTROL_CORE_1_RESETING 0 
+#define DPORT_REG_WRITE(a,b) 0 
+#define REG_GET_BIT(a,b) 0
+#define REG_SET_BIT(a,b) 0
+#define REG_CLR_BIT(a,b) 0
+
+static inline size_t heap_caps_get_free_size(int) { return 0; }
+static inline void *heap_caps_malloc(size_t s, int) { return malloc(s); }
+#define MALLOC_CAP_8BIT 0 
+static inline void heap_caps_print_heap_info(int) {}
+static inline size_t heap_caps_get_minimum_free_size(int) { return 0; }
+
+struct esp_partition_t { 
+	int size;
+	int erase_size;
+	uint8_t *data;
+};
+#define ESP_PARTITION_TYPE_DATA 0
+#define ESP_PARTITION_SUBTYPE_DATA_SPIFFS 0 
+static inline esp_partition_t *esp_partition_find_first(int, int, void *) { 
+	static esp_partition_t p = { .size = 1024 * 1024 * 8, .erase_size = 4096, .data = (uint8_t *)malloc(1024 * 1024 * 8)};
+	return &p;
+}
+static inline int esp_partition_write(const esp_partition_t *p, size_t off, const void *buf, size_t len) { 
+	memcpy(p->data + off, buf, len); 
+	return 0;
+}
+static inline int esp_partition_read(const esp_partition_t *p, size_t off, void *buf, size_t len) { 
+	memcpy(buf, p->data + off, len);
+	return 0; 
+}
+static inline int esp_partition_erase_range(const esp_partition_t *, size_t, size_t) { return 0; }
 #endif // #ifdef _ESP32SIM_UBUNTU_H_
