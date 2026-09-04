@@ -895,6 +895,10 @@ struct CsimContext {
 	uint64_t sleepTimerUsec = 0;
 	uint64_t wakeTimeUsec = 0;
 	bool sleeping = false;
+	// A context may be awakened at most once during one process execution.
+	// A subsequent wake requires a simulated deep-sleep re-exec so globals and
+	// boot-time state are reconstructed as they would be on real hardware.
+	bool wokeThisRun = false;
 };
 extern CsimContext defaultContext;
 // Stub out MPU9250 library

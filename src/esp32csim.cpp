@@ -92,7 +92,21 @@ static vector<CsimContext *> privateContexts() {
 	return contexts;
 }
 
+class CsimScopedContextSwap {
+	CsimContext *origC;
+public:
+	CsimScopedContextSwap(CsimContext *c) {
+		origC = currentContext;
+		currentContext = c == NULL ? &defaultContext : c;
+	}
+	~CsimScopedContextSwap() {
+		if (origC != NULL)
+			currentContext = origC;
+	}
+};
+
 static const char *contextSleepStateFile = "./csim_context_sleep.txt";
+static void reexecAfterDeepSleep(uint64_t waitUsec);
 
 static void saveContextSleepState() {
 	FILE *f = fopen(contextSleepStateFile, "w");
@@ -116,11 +130,41 @@ static void loadContextSleepState() {
 				continue;
 			context->wakeTimeUsec = wake;
 			context->sleeping = wake > sim().bootTimeUsec;
-			if (!context->sleeping)
+			if (!context->sleeping) {
 				context->wakeTimeUsec = 0;
+				// This context woke as part of process startup.  A later wake
+				// in this same process run must force another re-exec.
+				context->wokeThisRun = true;
+			}
 		}
 	}
 	fclose(f);
+}
+
+// Context wakeup is a live scheduler event.  A context whose deadline passes
+// while another context is running becomes runnable in the same process; it
+// does not need to wait for the next process re-exec.
+static void wakeDueContexts() {
+	uint64_t now = sim().bootTimeUsec + _micros;
+	for (auto module : sim().modules) {
+		CsimContext *context = module->context;
+		if (context == NULL || context == &defaultContext || !context->sleeping)
+			continue;
+		if (context->wakeTimeUsec > now)
+			continue;
+		if (context->wokeThisRun) {
+			// Do not dispatch a second boot for this context in the same
+			// process execution.  Re-exec at the current simulated time so
+			// normal global/static initialization occurs before it runs again.
+			reexecAfterDeepSleep(0);
+			return;
+		}
+		context->sleeping = false;
+		context->wakeTimeUsec = 0;
+		context->wokeThisRun = true;
+		CsimScopedContextSwap swap(context);
+		module->setup();
+	}
 }
 
 static void reexecAfterDeepSleep(uint64_t waitUsec) {
@@ -172,6 +216,7 @@ void esp_deep_sleep_start() {
 	}
 
 	assert(currentContext != &defaultContext);
+	wakeDueContexts();
 	currentContext->sleeping = true;
 	currentContext->wakeTimeUsec = sim().bootTimeUsec + _micros
 			+ currentContext->sleepTimerUsec;
@@ -459,20 +504,6 @@ static void csim_load_rtc_mem(int resetReason) {
 	}
 }
 
-class CsimScopedContextSwap {
-	CsimContext *origC;
-public:
-	CsimScopedContextSwap(CsimContext *c) {
-		origC = currentContext;
-		currentContext = c == NULL ? &defaultContext : c;
-	}
-	~CsimScopedContextSwap() {
-		if (origC != NULL) { 
-			currentContext = origC; 
-		}
-	}
-};
-
 void Csim::main(int argc, char **argv) {
 	assert(currentContext == &defaultContext); // someone didn't reset currentContext after module constructor
 	this->argc = argc;
@@ -510,6 +541,7 @@ void Csim::main(int argc, char **argv) {
 		realTimeMsec = tv.tv_sec * 1000 +  tv.tv_usec / 1000;
 
 		uint64_t now = millis();
+		wakeDueContexts();
 		//for(vector<Csim_Module *>::iterator it = modules.begin(); it != modules.end(); it++) 
 		for(auto it : modules) {
 			if (it->context != NULL && it->context->sleeping)
@@ -540,6 +572,7 @@ void Csim::delayMicroseconds(long long us) {
 	do {
 		int step = min(100000LL, us);
 		_micros += step;
+		wakeDueContexts();
 		for(auto it : modules) {
 			if (it->loopActive == false
 					&& (it->context == NULL || !it->context->sleeping)) {
