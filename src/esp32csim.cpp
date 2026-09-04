@@ -295,7 +295,10 @@ void ESPNOW_csimOneProg::send(const uint8_t *mac_addr, const uint8_t *data, int 
 	const char *cp = (const char *)data;
 	p.data = string(cp, cp + data_len);
 	for(auto o : instanceList()) {
-		if (o != this) 
+		// A sleeping simulated device has its radio powered down.  Do not
+		// queue packets for later delivery after it wakes; on real hardware
+		// those over-the-air packets were simply missed.
+		if (o != this && (o->context == NULL || !o->context->sleeping))
 			o->pktQueue.push_back(p);
 	}
 }
