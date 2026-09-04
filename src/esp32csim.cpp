@@ -73,17 +73,68 @@ void Csim_exit() { 	sim().exit(); }
 uint64_t sleep_timer = 0;
 vector<deepSleepHookT> deepSleepHooks;
 void csim_onDeepSleep(deepSleepHookT func) { deepSleepHooks.push_back(func); }
-void esp_deep_sleep_start() {
+
+int esp_sleep_enable_timer_wakeup(uint64_t t) {
+	sleep_timer = t; // Retain the legacy process-global value for old callers.
+	currentContext->sleepTimerUsec = t;
+	return 0;
+}
+
+static vector<CsimContext *> privateContexts() {
+	vector<CsimContext *> contexts;
+	for (auto module : sim().modules) {
+		CsimContext *context = module->context;
+		if (context == NULL || context == &defaultContext)
+			continue;
+		if (std::find(contexts.begin(), contexts.end(), context) == contexts.end())
+			contexts.push_back(context);
+	}
+	return contexts;
+}
+
+static const char *contextSleepStateFile = "./csim_context_sleep.txt";
+
+static void saveContextSleepState() {
+	FILE *f = fopen(contextSleepStateFile, "w");
+	if (f == NULL)
+		return;
+	for (auto context : privateContexts())
+		if (context->sleeping)
+			fprintf(f, "%012llx %llu\n", (unsigned long long)context->mac,
+					(unsigned long long)context->wakeTimeUsec);
+	fclose(f);
+}
+
+static void loadContextSleepState() {
+	FILE *f = fopen(contextSleepStateFile, "r");
+	if (f == NULL)
+		return;
+	unsigned long long mac, wake;
+	while (fscanf(f, "%llx %llu", &mac, &wake) == 2) {
+		for (auto context : privateContexts()) {
+			if (context->mac != mac)
+				continue;
+			context->wakeTimeUsec = wake;
+			context->sleeping = wake > sim().bootTimeUsec;
+			if (!context->sleeping)
+				context->wakeTimeUsec = 0;
+		}
+	}
+	fclose(f);
+}
+
+static void reexecAfterDeepSleep(uint64_t waitUsec) {
 	double newRunSec = -1;
 	if (sim().seconds >= 0) {
-		newRunSec = sim().seconds - (sleep_timer + _micros) / 1000000;
+		newRunSec = sim().seconds - (waitUsec + _micros) / 1000000;
 		if (newRunSec < 0) { 
 			fflush(stdout);
 			Csim_exit();
 		}
 	}
 
-	for (auto i : deepSleepHooks) i(sleep_timer);
+	for (auto i : deepSleepHooks) i(waitUsec);
+	saveContextSleepState();
 	csim_save_rtc_mem(); 
 
 	char *argv[128];
@@ -98,7 +149,7 @@ void esp_deep_sleep_start() {
 		else argv[argc++] = *p;
 	}
 	char bootTimeBuf[32], secondsBuf[32];
-	snprintf(bootTimeBuf, sizeof(bootTimeBuf), "%ld", sim().bootTimeUsec + sleep_timer + _micros);
+	snprintf(bootTimeBuf, sizeof(bootTimeBuf), "%ld", sim().bootTimeUsec + waitUsec + _micros);
 	argv[argc++] = (char *)"--boot-time";
 	argv[argc++] = bootTimeBuf; 
 	snprintf(secondsBuf, sizeof(secondsBuf), "%f", newRunSec);
@@ -111,9 +162,34 @@ void esp_deep_sleep_start() {
 	fflush(stdout);
 	execv("./csim", argv); 
 }
+
+void esp_deep_sleep_start() {
+	auto contexts = privateContexts();
+	if (contexts.empty()) {
+		reexecAfterDeepSleep(currentContext->sleepTimerUsec != 0
+				? currentContext->sleepTimerUsec : sleep_timer);
+		return;
+	}
+
+	assert(currentContext != &defaultContext);
+	currentContext->sleeping = true;
+	currentContext->wakeTimeUsec = sim().bootTimeUsec + _micros
+			+ currentContext->sleepTimerUsec;
+	saveContextSleepState();
+
+	uint64_t earliestWake = UINT64_MAX;
+	for (auto context : contexts) {
+		if (!context->sleeping)
+			return;
+		earliestWake = min(earliestWake, context->wakeTimeUsec);
+	}
+	uint64_t now = sim().bootTimeUsec + _micros;
+	reexecAfterDeepSleep(earliestWake > now ? earliestWake - now : 0);
+}
 void esp_light_sleep_start() {
 	delayMicroseconds(0); // run csim hooks 
-	_micros += sleep_timer; 
+	_micros += currentContext->sleepTimerUsec != 0
+			? currentContext->sleepTimerUsec : sleep_timer;
 	if (sim().seconds > 0 && micros() / 1000000.0 > sim().seconds)
 		Csim_exit();
 } 
@@ -400,6 +476,10 @@ void Csim::main(int argc, char **argv) {
 	this->argv = argv;
 	Serial.toConsole = true;
 	parseArgs(argc, argv); // skip argv[0]
+	// A normal invocation is a fresh boot.  The context checkpoint is consumed
+	// only by the deep-sleep exec path, which supplies reset reason 5.
+	if (resetReason == 5)
+		loadContextSleepState();
 	if (showArgs) { 
 		printf("args: ");
 			for(char **a = argv; a < argv+argc; a++) 
@@ -411,6 +491,8 @@ void Csim::main(int argc, char **argv) {
 	rtc_dummy = rtc_dummy + 1;
 
 	for(int i = 0; i < modules.size(); i++)  {// avoid iterator, modules may be added during setup() calls
+		if (modules[i]->context != NULL && modules[i]->context->sleeping)
+			continue;
 		CsimScopedContextSwap swap(modules[i]->context);		
 		modules[i]->setup();
 	}
@@ -427,6 +509,8 @@ void Csim::main(int argc, char **argv) {
 		uint64_t now = millis();
 		//for(vector<Csim_Module *>::iterator it = modules.begin(); it != modules.end(); it++) 
 		for(auto it : modules) {
+			if (it->context != NULL && it->context->sleeping)
+				continue;
 			CsimScopedContextSwap swap(it->context);		
 			it->loopActive = true;
 			it->loop();
@@ -443,8 +527,10 @@ void Csim::main(int argc, char **argv) {
 	}
 }
 void Csim::exit() { 
-	for(vector<Csim_Module *>::iterator it = modules.begin(); it != modules.end(); it++) 
-		(*it)->done();	
+	for (auto module : modules) {
+		CsimScopedContextSwap swap(module->context);
+		module->done();
+	}
 	::exit(0);
 }
 void Csim::delayMicroseconds(long long us) { 
@@ -452,7 +538,8 @@ void Csim::delayMicroseconds(long long us) {
 		int step = min(100000LL, us);
 		_micros += step;
 		for(auto it : modules) {
-			if (it->loopActive == false) {
+			if (it->loopActive == false
+					&& (it->context == NULL || !it->context->sleeping)) {
 				CsimScopedContextSwap swap(it->context);		
 				it->loopActive = true;
 				it->loop();
@@ -575,9 +662,29 @@ fs::File::File(const char *fn, int m) {
 	fd = open(filename.c_str(), mode, 0644);
 }
 
+string FakeSPIFFS::root() const {
+	char mac[32];
+	snprintf(mac, sizeof(mac), "%012llx",
+			(unsigned long long)(currentContext->mac & 0xffffffffffffULL));
+	mkdir("./csim-fs", 0755);
+	string result = string("./csim-fs/") + mac;
+	mkdir(result.c_str(), 0755);
+	return result;
+}
+
+string FakeSPIFFS::path(const char *name) const {
+	if (name == NULL || strstr(name, "..") != NULL)
+		return string();
+	const char *relative = name[0] == '/' ? name + 1 : name;
+	return root() + "/" + relative;
+}
+
 fs::File::File(const char *fn, const char *m) {
-	mkdir("./spiff", 0755);
-	filename = string("./spiff/") + fn;
+	// Each CSIM context models an independent device flash chip.  Firmware can
+	// therefore use its normal absolute paths without context-ID conventions.
+	filename = LittleFS.path(fn);
+	if (filename.empty())
+		return;
 	int mode = O_RDONLY;
 	if (strcmp(m, "a") == 0) mode = O_CREAT | O_APPEND | O_WRONLY;
 	if (strcmp(m, "r") == 0) mode = O_CREAT | O_RDONLY;

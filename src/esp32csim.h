@@ -193,22 +193,23 @@ public:
 
 using fs::File;
 struct FakeSPIFFS {
-	const string root = string("./spiff");
+	string root() const;
+	string path(const char *name) const;
 	void begin() {}
 	void format() {}
 	File open(const char *f, const char *m) { return File(f, m); } 
 	void rename(const char *oldname, const char *newname) { 
-		string fn1 = root + oldname;
-		string fn2 = root + newname;
+		string fn1 = path(oldname);
+		string fn2 = path(newname);
 		int n = ::rename(fn1.c_str(), fn2.c_str()); 
-	}	
+	}
 	void remove(const char *fn) { 
-		string fn1 = root + fn;
+		string fn1 = path(fn);
 		int n = ::remove(fn1.c_str()); 
 	}
 	int usedBytes() { return 20 * 1024; }
 	int totalBytes() { return 115 * 1024; }
-	int truncate(const char *f, int pos) { return ::truncate(f, pos); }
+	int truncate(const char *f, int pos) { return ::truncate(path(f).c_str(), pos); }
 };
 
 extern FakeSPIFFS SPIFFS, LittleFS;
@@ -526,7 +527,7 @@ inline static void gpio_deep_sleep_hold_en() {}
 inline static void gpio_hold_dis(int)  {}
 inline static void gpio_hold_en(int)  {}
 extern uint64_t sleep_timer;
-inline static int esp_sleep_enable_timer_wakeup(uint64_t t) { sleep_timer = t; return 0; }
+int esp_sleep_enable_timer_wakeup(uint64_t t);
 
 // TODO move all this to csim object
 typedef std::function<void(uint64_t usec)> deepSleepHookT;
@@ -889,6 +890,11 @@ int esp_now_send(const uint8_t*mac, const uint8_t*data, size_t len);
 struct CsimContext { 
 	uint64_t mac;
 	ESPNOW_csimInterface *espnow = NULL;
+	// Deep sleep belongs to a simulated device context.  wakeTimeUsec is an
+	// absolute simulated timestamp so it remains meaningful across exec().
+	uint64_t sleepTimerUsec = 0;
+	uint64_t wakeTimeUsec = 0;
+	bool sleeping = false;
 };
 extern CsimContext defaultContext;
 // Stub out MPU9250 library
