@@ -85,6 +85,7 @@ public:
 	int argc; 
 	char **argv;
 	uint64_t bootTimeUsec = 0;
+	uint64_t stopTimeUsec = 0;
 	double seconds = -1;
 	int resetReason = 0;
 	bool showArgs;

@@ -168,13 +168,10 @@ static void wakeDueContexts() {
 }
 
 static void reexecAfterDeepSleep(uint64_t waitUsec) {
-	double newRunSec = -1;
-	if (sim().seconds >= 0) {
-		newRunSec = sim().seconds - (waitUsec + _micros) / 1000000;
-		if (newRunSec < 0) { 
-			fflush(stdout);
-			Csim_exit();
-		}
+	if (sim().stopTimeUsec != 0 &&
+		sim().bootTimeUsec + _micros + waitUsec >= sim().stopTimeUsec) {
+		fflush(stdout);
+		Csim_exit();
 	}
 
 	for (auto i : deepSleepHooks) i(waitUsec);
@@ -188,23 +185,28 @@ static void reexecAfterDeepSleep(uint64_t waitUsec) {
 		if (strcmp(*p, "--boot-time") == 0) p++;
 		else if (strcmp(*p, "--seconds") == 0) p++;
 		else if (strcmp(*p, "-s") == 0) p++;
+		else if (strcmp(*p, "--stop-time-usec") == 0) p++;
 		else if (strcmp(*p, "--reset-reason") == 0) p++;
 		else if (strcmp(*p, "--show-args") == 0) {/*skip arg*/}
 		else argv[argc++] = *p;
 	}
-	char bootTimeBuf[32], secondsBuf[32];
+	char bootTimeBuf[32], stopTimeBuf[32];
 	snprintf(bootTimeBuf, sizeof(bootTimeBuf), "%ld", sim().bootTimeUsec + waitUsec + _micros);
 	argv[argc++] = (char *)"--boot-time";
 	argv[argc++] = bootTimeBuf; 
-	snprintf(secondsBuf, sizeof(secondsBuf), "%f", newRunSec);
-	argv[argc++] = (char *)"--seconds";
-	argv[argc++] = secondsBuf; 
+	snprintf(stopTimeBuf, sizeof(stopTimeBuf), "%llu",
+			(unsigned long long)sim().stopTimeUsec);
+	argv[argc++] = (char *)"--stop-time-usec";
+	argv[argc++] = stopTimeBuf;
 	argv[argc++] = (char *)"--reset-reason";
 	argv[argc++] = (char *)"5";
 	argv[argc++] = (char *)"--show-args";
 	argv[argc++] = NULL;
 	fflush(stdout);
-	execv("./csim", argv); 
+	// Re-execute the same simulator binary that was launched.  Harnesses such
+	// as csimix are not necessarily named "csim"; using a hard-coded path can
+	// silently switch to a stale executable on the first deep-sleep reboot.
+	execv(sim().argv[0], argv);
 }
 
 void esp_deep_sleep_start() {
@@ -235,7 +237,7 @@ void esp_light_sleep_start() {
 	delayMicroseconds(0); // run csim hooks 
 	_micros += currentContext->sleepTimerUsec != 0
 			? currentContext->sleepTimerUsec : sleep_timer;
-	if (sim().seconds > 0 && micros() / 1000000.0 > sim().seconds)
+	if (sim().stopTimeUsec != 0 && sim().bootTimeUsec + micros() > sim().stopTimeUsec)
 		Csim_exit();
 } 
 
@@ -450,6 +452,11 @@ void Csim::parseArgs(int argc, char **argv) {
 		else if (strcmp(*a, "--seconds") == 0) sscanf(*(++a), "%lf", &seconds); 
 		else if (strcmp(*a, "-s") == 0) sscanf(*(++a), "%lf", &seconds); 
 		else if (strcmp(*a, "--boot-time") == 0) sscanf(*(++a), "%ld", &bootTimeUsec); 
+		else if (strcmp(*a, "--stop-time-usec") == 0) {
+			unsigned long long stop;
+			sscanf(*(++a), "%llu", &stop);
+			stopTimeUsec = stop;
+		}
 		else if (strcmp(*a, "--show-args") == 0) showArgs = true; 
 		else if (strcmp(*a, "--reset-reason") == 0) sscanf(*(++a), "%d", &resetReason); 
 		else if (strcmp(*a, "--mac") == 0) { 
@@ -488,18 +495,31 @@ static RTC_NOINIT_ATTR int rtc_dummy;
 extern uint8_t __start_CSIM_RTC_MEM, __stop_CSIM_RTC_MEM;
 
 static void csim_save_rtc_mem() {
-	size_t len = &__stop_CSIM_RTC_MEM - &__start_CSIM_RTC_MEM;
+	uintptr_t start = reinterpret_cast<uintptr_t>(&__start_CSIM_RTC_MEM);
+	uintptr_t stop = reinterpret_cast<uintptr_t>(&__stop_CSIM_RTC_MEM);
+	assert(stop >= start);
+	size_t len = stop - start;
 	int fd = open("./csim_rtc.bin", O_CREAT | O_WRONLY, 0644);
-	write(fd, &__start_CSIM_RTC_MEM, len);
+	write(fd, reinterpret_cast<const void *>(start), len);
 	close(fd);
 }
 
 static void csim_load_rtc_mem(int resetReason) {
-	size_t len = &__stop_CSIM_RTC_MEM - &__start_CSIM_RTC_MEM;
-	memset(&__start_CSIM_RTC_MEM, 0xde, len);
-	if (resetReason == 5) {  
+	uintptr_t start = reinterpret_cast<uintptr_t>(&__start_CSIM_RTC_MEM);
+	uintptr_t stop = reinterpret_cast<uintptr_t>(&__stop_CSIM_RTC_MEM);
+	assert(stop >= start);
+	size_t len = stop - start;
+	// The linker symbols do not describe a C++ object to __builtin_object_size,
+	// so fortified memset() rejects this valid linker-section range under -O2.
+	// Byte stores express the intended operation without that false positive.
+	for (size_t i = 0; i < len; ++i)
+		reinterpret_cast<volatile uint8_t *>(start)[i] = 0xde;
+	if (resetReason == 5) {
 		int fd = open("./csim_rtc.bin", O_RDONLY, 0644);
-		read(fd, &__start_CSIM_RTC_MEM, len);
+		vector<uint8_t> saved(len);
+		read(fd, saved.data(), len);
+		for (size_t i = 0; i < len; ++i)
+			reinterpret_cast<volatile uint8_t *>(start)[i] = saved[i];
 		close(fd);
 	}
 }
@@ -510,6 +530,8 @@ void Csim::main(int argc, char **argv) {
 	this->argv = argv;
 	Serial.toConsole = true;
 	parseArgs(argc, argv); // skip argv[0]
+	if (stopTimeUsec == 0 && seconds >= 0)
+		stopTimeUsec = bootTimeUsec + (uint64_t)(seconds * 1000000.0);
 	// A normal invocation is a fresh boot.  The context checkpoint is consumed
 	// only by the deep-sleep exec path, which supplies reset reason 5.
 	if (resetReason == 5)
@@ -527,6 +549,10 @@ void Csim::main(int argc, char **argv) {
 	for(int i = 0; i < modules.size(); i++)  {// avoid iterator, modules may be added during setup() calls
 		if (modules[i]->context != NULL && modules[i]->context->sleeping)
 			continue;
+		// A process-wide deep-sleep re-exec can have been caused by a
+		// different private context.  An awake context may therefore see
+		// setup() again without having entered its own deep sleep; context
+		// firmware must restore its state idempotently.
 		CsimScopedContextSwap swap(modules[i]->context);		
 		modules[i]->setup();
 	}
@@ -534,7 +560,7 @@ void Csim::main(int argc, char **argv) {
 	setup();
 
 	uint64_t lastMillis = 0;
-	while(seconds <= 0 || _micros / 1000000.0 < seconds) {
+	while(stopTimeUsec == 0 || bootTimeUsec + _micros < stopTimeUsec) {
 		lastRealTimeMsec = realTimeMsec;
 		struct timeval tv;
 		gettimeofday(&tv,NULL);
@@ -584,7 +610,7 @@ void Csim::delayMicroseconds(long long us) {
 		}
 		intMan.run();
 		us -= step;
-		if (sim().seconds > 0 && micros() / 1000000.0 > sim().seconds)
+		if (sim().stopTimeUsec != 0 && sim().bootTimeUsec + micros() > sim().stopTimeUsec)
 			Csim_exit();
 	} while(us > 0);
 }
