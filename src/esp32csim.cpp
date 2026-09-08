@@ -353,7 +353,12 @@ void ESPNOW_csimOneProg::send(const uint8_t *mac_addr, const uint8_t *data, int 
 void ESPNOW_csimOneProg::loop() { // override
 	for(auto pkt : pktQueue) {
 		if (recv_cb != NULL) {
+			uint64_t sender = 0;
+			for (uint8_t octet : pkt.send_addr) sender = (sender << 8) | octet;
+			const uint64_t receiver = context ? context->mac : 0;
 			if (SIMFAILURE("espnow-rx") || SIMFAILURE("espnow"))
+				continue;
+			if (sim().espnowDeliveryFailureHook(sender, receiver))
 				continue;
 			recv_cb(pkt.send_addr, (const uint8_t *)pkt.data.c_str(), pkt.data.length());
 		}

@@ -105,6 +105,10 @@ public:
 		return floor(realTimeMsec / 1000.0 / s) != floor(lastRealTimeMsec / 1000.0 / s);
 	}
 	std::function<bool(const char*)> simFailureHook = [](const char *){return false;};
+	// Optional application-owned directed ESP-NOW delivery model. Return true
+	// to drop one packet after it reaches the receiver queue.
+	std::function<bool(uint64_t,uint64_t)> espnowDeliveryFailureHook =
+		[](uint64_t, uint64_t){return false;};
 };
 
 Csim &sim();	
