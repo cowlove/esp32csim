@@ -88,6 +88,8 @@ public:
 	uint64_t stopTimeUsec = 0;
 	double seconds = -1;
 	int resetReason = 0;
+	uint32_t randomSeed = 1;
+	uint32_t reexecGeneration = 0;
 	bool showArgs;
 	uint64_t realTimeMsec, lastRealTimeMsec;
 	vector<Csim_Module *> modules;

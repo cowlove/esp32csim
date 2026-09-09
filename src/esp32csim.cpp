@@ -180,17 +180,20 @@ static void reexecAfterDeepSleep(uint64_t waitUsec) {
 
 	char *argv[128];
 	int argc = 0; 
-	// strip out all --boot-time, --seconds, --reset-reason and --show-args command line arguments
+	// Strip transient scheduler arguments. The user-provided random seed stays
+	// in argv; the internal generation is replaced below so libc rand() starts
+	// from a different deterministic point after each deep-sleep re-exec.
 	for(char *const *p = sim().argv; *p != NULL; p++) {
 		if (strcmp(*p, "--boot-time") == 0) p++;
 		else if (strcmp(*p, "--seconds") == 0) p++;
 		else if (strcmp(*p, "-s") == 0) p++;
 		else if (strcmp(*p, "--stop-time-usec") == 0) p++;
 		else if (strcmp(*p, "--reset-reason") == 0) p++;
+		else if (strcmp(*p, "--csim-reexec-generation") == 0) p++;
 		else if (strcmp(*p, "--show-args") == 0) {/*skip arg*/}
 		else argv[argc++] = *p;
 	}
-	char bootTimeBuf[32], stopTimeBuf[32];
+	char bootTimeBuf[32], stopTimeBuf[32], generationBuf[32];
 	snprintf(bootTimeBuf, sizeof(bootTimeBuf), "%ld", sim().bootTimeUsec + waitUsec + _micros);
 	argv[argc++] = (char *)"--boot-time";
 	argv[argc++] = bootTimeBuf; 
@@ -200,6 +203,10 @@ static void reexecAfterDeepSleep(uint64_t waitUsec) {
 	argv[argc++] = stopTimeBuf;
 	argv[argc++] = (char *)"--reset-reason";
 	argv[argc++] = (char *)"5";
+	argv[argc++] = (char *)"--csim-reexec-generation";
+	snprintf(generationBuf, sizeof(generationBuf), "%u",
+			sim().reexecGeneration + 1U);
+	argv[argc++] = generationBuf;
 	argv[argc++] = (char *)"--show-args";
 	argv[argc++] = NULL;
 	fflush(stdout);
@@ -464,6 +471,9 @@ void Csim::parseArgs(int argc, char **argv) {
 		}
 		else if (strcmp(*a, "--show-args") == 0) showArgs = true; 
 		else if (strcmp(*a, "--reset-reason") == 0) sscanf(*(++a), "%d", &resetReason); 
+		else if (strcmp(*a, "--random-seed") == 0) sscanf(*(++a), "%u", &randomSeed);
+		else if (strcmp(*a, "--csim-reexec-generation") == 0)
+			sscanf(*(++a), "%u", &reexecGeneration);
 		else if (strcmp(*a, "--mac") == 0) { 
 			sscanf(*(++a), "%lx", &defaultContext.mac);
 		} else if (strcmp(*a, "--espnowPipe") == 0) { 
@@ -535,6 +545,12 @@ void Csim::main(int argc, char **argv) {
 	this->argv = argv;
 	Serial.toConsole = true;
 	parseArgs(argc, argv); // skip argv[0]
+	// libc's implicit seed restarts on exec(). Make each simulated boot slice
+	// distinct while preserving exact repeatability for a user-selected seed.
+	const uint32_t effectiveRandomSeed = randomSeed + reexecGeneration;
+	srand(effectiveRandomSeed);
+	if (reexecGeneration == 0)
+		printf("csim random-seed %u\n", randomSeed);
 	if (stopTimeUsec == 0 && seconds >= 0)
 		stopTimeUsec = bootTimeUsec + (uint64_t)(seconds * 1000000.0);
 	// A normal invocation is a fresh boot.  The context checkpoint is consumed
